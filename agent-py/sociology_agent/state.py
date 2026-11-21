@@ -6,18 +6,20 @@ from langchain.schema import Document
 
 class GraphState(TypedDict):
     """
-    Represents the state of our graph.
+    State of the Corrective RAG (CRAG) workflow.
 
     Attributes:
-        question: The user's question.
-        documents: List of retrieved documents.
+        question: The user query.
+        documents: Retrieved and filtered document chunks.
         generation: The generated answer.
-        web_search: Whether a web search was performed.
-        messages: List of chat messages (HumanMessage, AIMessage).
+        web_search: Flag indicating if web search should be or was performed.
+        retry_count: Count of web search re-attempts to prevent infinite loops.
+        messages: Conversation messages.
     """
 
     question: str
     documents: List[Document]
     generation: str
     web_search: bool
+    retry_count: int
     messages: Annotated[List[BaseMessage], add_messages]

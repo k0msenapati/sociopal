@@ -1,13 +1,14 @@
 import os
+import time
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from pydantic import BaseModel
 
 from .agent import graph
-from .config import PERSIST_DIRECTORY
+from .config import PERSIST_DIRECTORY, logger
 
 
-app = FastAPI(title="LangGraph RAG API")
+app = FastAPI(title="SocioPal CRAG API")
 
 app.add_middleware(
     CORSMiddleware,
@@ -17,16 +18,18 @@ app.add_middleware(
 )
 
 if not os.path.exists(PERSIST_DIRECTORY):
-    raise RuntimeError(
-        f"Chroma DB directory '{PERSIST_DIRECTORY}' not found. "
-        "Please run 'uv run scripts/index.py' first to create the vector database."
+    logger.warning(
+        "ChromaDB directory '%s' not found. Agent will operate with web search fallback.",
+        PERSIST_DIRECTORY,
     )
 
 rag_agent = graph
 
+
 class QueryRequest(BaseModel):
     question: str
     web_search: bool = False
+
 
 thread_id_counter = 1
 
@@ -35,29 +38,38 @@ thread_id_counter = 1
 async def query_agent(request: QueryRequest):
     global thread_id_counter
 
-    if not request.question.strip():
+    question = request.question.strip()
+    if not question:
         raise HTTPException(status_code=400, detail="Question cannot be empty.")
 
-    try:
-        print(f"Processing query: {request.question}")
+    start_time = time.time()
+    thread_id = str(thread_id_counter)
+    thread_id_counter += 1
 
+    logger.info("[API] Request #%s: '%s' (web_search=%s)", thread_id, question, request.web_search)
+
+    try:
         final_state = rag_agent.invoke(
             {
-                "question": request.question,
+                "question": question,
                 "documents": [],
                 "generation": "",
                 "web_search": request.web_search,
+                "retry_count": 0,
                 "messages": [],
             },
-            config={"configurable": {"thread_id": str(thread_id_counter)}},
+            config={"configurable": {"thread_id": thread_id}},
         )
 
-        thread_id_counter += 1
+        elapsed = time.time() - start_time
+        answer = final_state.get("generation", "")
+        logger.info("[API] Request #%s completed in %.2fs (%d chars)", thread_id, elapsed, len(answer))
 
         return {
-            "question": request.question,
-            "answer": final_state["generation"]
+            "question": question,
+            "answer": answer,
         }
 
     except Exception as e:
+        logger.error("[API] Request #%s failed: %s", thread_id, e)
         raise HTTPException(status_code=500, detail=str(e))

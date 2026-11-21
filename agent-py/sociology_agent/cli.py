@@ -1,7 +1,8 @@
 import os
+from langchain_core.messages import HumanMessage
 
 from .agent import graph
-from .config import PERSIST_DIRECTORY
+from .config import PERSIST_DIRECTORY, logger
 
 
 def run_agent():
@@ -9,10 +10,8 @@ def run_agent():
     Main function to run the LangGraph RAG agent.
     """
     if not os.path.exists(PERSIST_DIRECTORY):
-        print(f"Error: Chroma DB directory '{PERSIST_DIRECTORY}' not found.")
-        print(
-            "Please run 'uv run scripts/index.py' first to create the vector database."
-        )
+        logger.error("Chroma DB directory '%s' not found.", PERSIST_DIRECTORY)
+        logger.info("Please run 'uv run python -m sociology_agent.index' to create the vector database.")
         return
 
     app = graph
@@ -28,6 +27,7 @@ def run_agent():
             "documents": [],
             "generation": "",
             "web_search": False,
+            "retry_count": 0,
             "messages": [],
         },
         config={"configurable": {"thread_id": "1"}},
@@ -46,6 +46,7 @@ def run_agent():
             "documents": [],
             "generation": "",
             "web_search": False,
+            "retry_count": 0,
             "messages": [],
         },
         config={"configurable": {"thread_id": "2"}},
@@ -59,8 +60,8 @@ def run_cli_agent():
     Main function to run the LangGraph RAG agent as an interactive CLI.
     """
     if not os.path.exists(PERSIST_DIRECTORY):
-        print(f"Error: Chroma DB directory '{PERSIST_DIRECTORY}' not found.")
-        print("Please run 'python index.py' first to create the vector database.")
+        logger.error("Chroma DB directory '%s' not found.", PERSIST_DIRECTORY)
+        logger.info("Please run 'uv run python -m sociology_agent.index' to create the vector database.")
         return
 
     app = graph
@@ -81,7 +82,8 @@ def run_cli_agent():
             print("Please enter a question.")
             continue
 
-        print(f"\nProcessing question: '{user_question}'...")
+        messages.append(HumanMessage(content=user_question))
+        logger.info("[CLI] Processing question: '%s'...", user_question)
 
         try:
             final_state = app.invoke(
@@ -90,6 +92,7 @@ def run_cli_agent():
                     "documents": [],
                     "generation": "",
                     "web_search": False,
+                    "retry_count": 0,
                     "messages": messages,
                 },
                 config={"configurable": {"thread_id": str(thread_id_counter)}},
@@ -102,7 +105,7 @@ def run_cli_agent():
             thread_id_counter += 1
 
         except Exception as e:
-            print(f"An error occurred while processing your question: {e}")
+            logger.error("[CLI] Processing error: %s", e)
             print("Please try again or check your environment setup.")
 
 

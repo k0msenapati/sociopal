@@ -3,203 +3,281 @@ from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.output_parsers import StrOutputParser
 from langchain_core.messages import HumanMessage, AIMessage
 
-from .config import llm, web_search_tool, retriever
+from .config import llm, web_search_tool, get_retriever, logger
 from .state import GraphState
 
 
 def retrieve(state: GraphState):
     """
-    Retrieves documents from the vector store based on the question.
+    Retrieves relevant document chunks from the vector store.
     """
-    print("---RETRIEVE---")
-
-    chat_history = state.get("chat_history", [])
-    question = ""
-    if chat_history:
-        for msg in reversed(chat_history):
+    question = state.get("question", "").strip()
+    if not question:
+        messages = state.get("messages", [])
+        for msg in reversed(messages):
             if isinstance(msg, HumanMessage):
-                question = str(msg.content)
+                question = str(msg.content).strip()
                 break
 
     if not question:
-        question = state.get("question", "")
+        logger.warning("[Retrieve] Empty question received")
+        return {"documents": [], "web_search": state.get("web_search", False)}
 
-    if not question:
-        print("No question found in state or chat history. Skipping retrieval.")
-        return {"documents": [], "web_search": False, "question": ""}
-
+    retriever = get_retriever()
     if retriever is None:
-        print("Retriever not initialized. Skipping retrieval.")
-        return {"documents": [], "web_search": False}
+        logger.warning("[Retrieve] Retriever unavailable -> web_search")
+        return {"documents": [], "web_search": True, "question": question}
 
-    documents = retriever.invoke(question)
-    print(f"Retrieved {len(documents)} documents.")
-    return {"documents": documents, "web_search": False}
+    try:
+        documents = retriever.invoke(question)
+        logger.info("[Retrieve] Found %d chunk(s) from ChromaDB", len(documents))
+        return {
+            "documents": documents,
+            "question": question,
+            "web_search": state.get("web_search", False),
+        }
+    except Exception as e:
+        logger.error("[Retrieve] ChromaDB retrieval error: %s", e)
+        return {"documents": [], "web_search": True, "question": question}
 
 
 def grade_documents(state: GraphState):
     """
-    Grades the relevance of the retrieved documents to the question.
-    If documents are not relevant, triggers a web search.
+    Evaluates whether retrieved documents are relevant to the question in a single batch.
     """
-    print("---GRADE DOCUMENTS---")
-    question = state["question"]
-    documents = state["documents"]
+    question = state.get("question", "")
+    documents = state.get("documents", [])
+    force_web_search = state.get("web_search", False)
 
     if not documents:
-        print("No documents to grade. Proceeding to web search.")
+        logger.info("[Grade] No documents retrieved -> web_search")
         return {"documents": [], "web_search": True}
+
+    if force_web_search:
+        logger.info("[Grade] Web search requested by user -> web_search")
+        return {"documents": documents, "web_search": True}
+
+    formatted_chunks = "\n\n".join(
+        [f"Chunk [{i}]:\n{d.page_content.strip()[:600]}" for i, d in enumerate(documents, 1)]
+    )
 
     prompt = ChatPromptTemplate.from_messages(
         [
             (
                 "system",
-                """You are a grader assessing the relevance of a retrieved document to a user question.
-        If the document contains information directly relevant to the question, output 'yes'.
-        Otherwise, output 'no'. Do not provide any other explanation.""",
+                "You are an evaluator assessing the relevance of retrieved sociology document chunks to a question.\n"
+                "List ONLY the numbers of the chunks containing relevant information to answer the question.\n"
+                "Format: Comma-separated numbers (e.g., '1, 3') or 'none' if none are relevant. No other text.",
             ),
-            ("human", "Question: {question}\nDocument: {document}"),
+            ("human", "Question: {question}\n\n{chunks}"),
         ]
     )
-    retrieval_grader = prompt | llm | StrOutputParser()
+    grader = prompt | llm | StrOutputParser()
 
-    filtered_documents = []
-    for d in documents:
-        score = retrieval_grader.invoke(
-            {"question": question, "document": d.page_content}
-        )
-        if score.strip().lower() == "yes":
-            print(f"Document relevant: {d.page_content[:100]}...")
-            filtered_documents.append(d)
-        else:
-            print(f"Document NOT relevant: {d.page_content[:100]}...")
+    try:
+        result = grader.invoke({"question": question, "chunks": formatted_chunks})
+        logger.info("[Grade] Relevance output: '%s'", result.strip())
 
-    if not filtered_documents:
-        print("No relevant documents found. Initiating web search.")
-        return {"documents": [], "web_search": True}
+        filtered = []
+        if "none" not in result.lower():
+            for i, d in enumerate(documents, 1):
+                if str(i) in result:
+                    filtered.append(d)
+
+        if not filtered and len(documents) > 0 and "none" not in result.lower():
+            filtered = documents[:2]
+    except Exception as e:
+        logger.warning("[Grade] Evaluation error: %s (keeping chunks)", e)
+        filtered = documents
+
+    logger.info(
+        "[Grade] Evaluated %d chunk(s): %d relevant, %d discarded",
+        len(documents),
+        len(filtered),
+        len(documents) - len(filtered),
+    )
+
+    needs_web_search = len(filtered) == 0
+    return {"documents": filtered, "web_search": needs_web_search}
+
+
+def decide_to_retrieve_or_web_search(state: GraphState):
+    """
+    Routes to web search or answer generation.
+    """
+    if state.get("web_search", False):
+        logger.info("[Route] Insufficient context -> web_search")
+        return "web_search"
     else:
-        print(f"Found {len(filtered_documents)} relevant documents.")
-        return {"documents": filtered_documents, "web_search": False}
-
-
-def generate(state: GraphState):
-    """
-    Generates an answer based on the question and retrieved documents.
-    """
-    print("---GENERATE---")
-    question = state["question"]
-    documents = state["documents"]
-    messages = state["messages"]
-
-    context = "\n\n".join([d.page_content for d in documents])
-
-    prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """You are an AI assistant for question-answering tasks.
-        Use the following retrieved context to answer the question.
-        If you don't know the answer, state that you don't know.
-        Provide a concise and accurate answer.
-        Context: {context}""",
-            ),
-            ("human", "Question: {question}"),
-        ]
-    )
-
-    rag_chain = prompt | llm | StrOutputParser()
-
-    generation = rag_chain.invoke({"context": context, "question": question})
-    print(f"Generated answer: {generation[:100]}...")
-
-    messages.append(AIMessage(content=generation))
-    return {"generation": generation, "messages": messages}
+        logger.info("[Route] Sufficient context -> generate")
+        return "generate"
 
 
 def web_search(state: GraphState):
     """
-    Performs a web search based on the question.
-    This is typically called when initial retrieval fails or documents are not relevant.
+    Performs web search via DuckDuckGo when vector context is insufficient.
     """
-    print("---WEB SEARCH---")
-    question = state["question"]
-    documents = state["documents"]
+    question = state.get("question", "").strip()
+    documents = list(state.get("documents", []))
+    retry_count = state.get("retry_count", 0)
 
-    if not question or question.strip() == "":
-        print("Web search skipped: Question is empty.")
-        return {"documents": [], "web_search": True}
+    if not question:
+        logger.warning("[WebSearch] Empty question; skipping search")
+        return {"documents": documents, "web_search": False, "retry_count": retry_count + 1}
 
-    print(f"Performing web search for: {question}")
-    docs = web_search_tool.invoke(question)
-    web_results = "\n".join([d["snippet"] for d in docs])
-    web_results = Document(page_content=web_results)
-    print(f"Web search retrieved {len(docs)} results.")
+    search_query = f"{question} sociology" if "sociology" not in question.lower() else question
+    logger.info("[WebSearch] Querying: '%s'", search_query)
 
-    documents.append(web_results)
-    return {"documents": documents, "web_search": True}
+    try:
+        raw_results = web_search_tool.invoke(search_query)
+        snippets = []
+
+        if isinstance(raw_results, list):
+            for item in raw_results:
+                if isinstance(item, dict):
+                    snip = item.get("snippet") or item.get("body") or item.get("title", "")
+                    if snip:
+                        snippets.append(snip)
+                elif isinstance(item, str) and item.strip():
+                    snippets.append(item.strip())
+        elif isinstance(raw_results, str) and raw_results.strip():
+            snippets.append(raw_results.strip())
+
+        if snippets:
+            combined = "\n\n".join(snippets[:4])
+            documents.append(Document(page_content=combined, metadata={"source": "duckduckgo"}))
+            logger.info("[WebSearch] Retrieved %d snippet(s)", len(snippets))
+        else:
+            logger.warning("[WebSearch] 0 snippets returned")
+    except Exception as e:
+        logger.error("[WebSearch] Search error: %s", e)
+
+    return {"documents": documents, "web_search": False, "retry_count": retry_count + 1}
+
+
+def generate(state: GraphState):
+    """
+    Synthesizes a structured, concise sociology explanation using context.
+    """
+    question = state.get("question", "")
+    documents = state.get("documents", [])
+    messages = list(state.get("messages", []))
+
+    valid_chunks = [d.page_content.strip() for d in documents if d.page_content.strip()]
+    logger.info("[Generate] Synthesizing answer with %d context document(s)", len(valid_chunks))
+
+    if valid_chunks:
+        context = "\n\n---\n\n".join(valid_chunks)
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "You are SocioPal, an expert sociology AI assistant.\n"
+                    "Provide an articulate, accurate, and concise explanation (around 250-400 words).\n"
+                    "Ground your answer in the provided context, highlighting theoretical definitions, foundational thinkers, and analytical distinctions.\n\n"
+                    "Context:\n{context}",
+                ),
+                ("human", "{question}"),
+            ]
+        )
+        chain = prompt | llm | StrOutputParser()
+        generation = chain.invoke({"context": context, "question": question})
+    else:
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "You are SocioPal, an expert sociology AI assistant.\n"
+                    "Provide an articulate, accurate, and structured explanation (around 250-400 words).\n"
+                    "Detail the core theoretical definitions, relevant thinkers, and sociological significance.",
+                ),
+                ("human", "{question}"),
+            ]
+        )
+        chain = prompt | llm | StrOutputParser()
+        generation = chain.invoke({"question": question})
+
+    logger.info("[Generate] Answer generated (%d characters)", len(generation))
+    messages.append(AIMessage(content=generation))
+    return {"generation": generation, "messages": messages}
 
 
 def grade_generation_v_documents_and_question(state: GraphState):
     """
-    Grades the generated answer against the retrieved documents and the original question
-    to check for hallucination and grounding.
+    Assesses answer for grounding and question relevance in a single unified prompt.
     """
-    print("---GRADE GENERATION---")
-    question = state["question"]
-    documents = state["documents"]
-    generation = state["generation"]
+    question = state.get("question", "")
+    documents = state.get("documents", [])
+    generation = state.get("generation", "")
+    retry_count = state.get("retry_count", 0)
 
-    hallucination_prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """You are a grader assessing if an answer is grounded in a document.
-        If the answer is directly supported by the document, output 'yes'.
-        Otherwise, output 'no'. Do not provide any other explanation.""",
-            ),
-            ("human", "Document: {document}\nAnswer: {generation}"),
-        ]
-    )
-    hallucination_grader = hallucination_prompt | llm | StrOutputParser()
-
-    relevance_prompt = ChatPromptTemplate.from_messages(
-        [
-            (
-                "system",
-                """You are a grader assessing if an answer addresses the question.
-        If the answer provides a direct and comprehensive response to the question, output 'yes'.
-        Otherwise, output 'no'. Do not provide any other explanation.""",
-            ),
-            ("human", "Question: {question}\nAnswer: {generation}"),
-        ]
-    )
-    relevance_grader = relevance_prompt | llm | StrOutputParser()
-
-    doc_content = "\n\n".join([d.page_content for d in documents])
-    hallucination_score = hallucination_grader.invoke(
-        {"document": doc_content, "generation": generation}
-    )
-    is_hallucinated = hallucination_score.strip().lower() == "no"
-    print(
-        f"Hallucination check (grounded in docs): {'No' if is_hallucinated else 'Yes'}"
-    )
-
-    relevance_score = relevance_grader.invoke(
-        {"question": question, "generation": generation}
-    )
-    is_relevant = relevance_score.strip().lower() == "yes"
-    print(f"Relevance check (answers question): {'Yes' if is_relevant else 'No'}")
-
-    if is_hallucinated:
-        print(
-            "Decision: Generated answer is hallucinated. Re-attempting with web search."
-        )
-        return "re_attempt_web_search"
-    elif not is_relevant:
-        print(
-            "Decision: Generated answer is not relevant to the question. Re-attempting with web search."
-        )
-        return "re_attempt_web_search"
-    else:
-        print("Decision: Generated answer is grounded and relevant. FINISH.")
+    if retry_count >= 1:
+        logger.info("[Verify] Max retry limit reached (retry_count=%d) -> finish", retry_count)
         return "finish"
+
+    doc_content = "\n\n".join([d.page_content.strip() for d in documents if d.page_content.strip()])
+
+    if not doc_content:
+        prompt = ChatPromptTemplate.from_messages(
+            [
+                (
+                    "system",
+                    "Assess whether the generated answer directly addresses the sociology question.\n"
+                    "Output only 'yes' if relevant, otherwise 'no'.",
+                ),
+                ("human", "Question: {question}\nAnswer: {generation}"),
+            ]
+        )
+        grader = prompt | llm | StrOutputParser()
+        try:
+            resp = grader.invoke({"question": question, "generation": generation})
+            is_relevant = "yes" in resp.strip().lower()
+        except Exception:
+            is_relevant = True
+        logger.info("[Verify] Empty context -> Relevance: %s", "Pass" if is_relevant else "Fail")
+        return "finish" if is_relevant else "re_attempt_web_search"
+
+    prompt = ChatPromptTemplate.from_messages(
+        [
+            (
+                "system",
+                "You are an evaluator assessing a generated sociology answer against the provided context and question.\n"
+                "Evaluate two criteria:\n"
+                "1. Grounded: Is the answer consistent with and supported by the context without gross fabrication?\n"
+                "2. Relevant: Does the answer directly address the user's question?\n\n"
+                "Respond in this exact format:\n"
+                "Grounded: yes/no\n"
+                "Relevant: yes/no",
+            ),
+            ("human", "Question: {question}\n\nContext:\n{context}\n\nAnswer:\n{generation}"),
+        ]
+    )
+    verifier = prompt | llm | StrOutputParser()
+
+    try:
+        verdict = verifier.invoke(
+            {
+                "question": question,
+                "context": doc_content[:2000],
+                "generation": generation[:2000],
+            }
+        )
+        is_grounded = "grounded: yes" in verdict.lower() or "grounded:yes" in verdict.lower()
+        is_relevant = "relevant: yes" in verdict.lower() or "relevant:yes" in verdict.lower()
+    except Exception as e:
+        logger.warning("[Verify] Verification error: %s (defaulting to Pass)", e)
+        is_grounded = True
+        is_relevant = True
+
+    logger.info(
+        "[Verify] Grounded: %s | Relevant: %s",
+        "Yes" if is_grounded else "No",
+        "Yes" if is_relevant else "No",
+    )
+
+    if is_grounded and is_relevant:
+        logger.info("[Decision] Verification passed -> finish")
+        return "finish"
+    else:
+        logger.info("[Decision] Verification failed -> re_attempt_web_search")
+        return "re_attempt_web_search"
