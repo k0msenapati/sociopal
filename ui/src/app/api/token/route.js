@@ -2,8 +2,7 @@ export async function GET() {
   const apiKey = process.env.ASSEMBLYAI_API_KEY
 
   if (!apiKey) {
-    console.error('Missing ASSEMBLYAI_API_KEY')
-    return new Response(JSON.stringify({ error: 'API key not configured' }), { status: 500 })
+    return new Response(JSON.stringify({ error: 'API key not configured' }), { status: 503 })
   }
 
   const expiresInSeconds = 60

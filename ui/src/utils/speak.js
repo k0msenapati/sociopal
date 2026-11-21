@@ -1,4 +1,6 @@
 export async function speak(text, voiceId = 'JBFqnCBsd6RMkjVDRZzb') {
+  if (!text || typeof window === 'undefined') return
+
   try {
     const response = await fetch('/api/text-to-speech', {
       method: 'POST',
@@ -6,12 +8,12 @@ export async function speak(text, voiceId = 'JBFqnCBsd6RMkjVDRZzb') {
       body: JSON.stringify({ text, voiceId }),
     })
 
-    if (!response.ok) throw new Error('TTS failed')
+    if (!response.ok) return
 
     const blob = await response.blob()
     const url = URL.createObjectURL(blob)
     const audio = new Audio(url)
-    audio.play()
+    audio.play().catch(() => {})
   } catch (err) {
     console.error('[TTS Error]:', err)
   }

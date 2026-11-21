@@ -1,14 +1,20 @@
 import { ElevenLabsClient } from '@elevenlabs/elevenlabs-js';
 import { NextResponse } from 'next/server';
 
-const elevenlabs = new ElevenLabsClient({
-  apiKey: process.env.ELEVENLABS_API_KEY,
-});
-
 export async function POST(request) {
-  const { text, voiceId } = await request.json();
+  const apiKey = process.env.ELEVENLABS_API_KEY;
+
+  if (!apiKey) {
+    return NextResponse.json(
+      { error: 'ELEVENLABS_API_KEY is not configured' },
+      { status: 503 }
+    );
+  }
+
+  const { text, voiceId = 'JBFqnCBsd6RMkjVDRZzb' } = await request.json();
 
   try {
+    const elevenlabs = new ElevenLabsClient({ apiKey });
     const audioStream = await elevenlabs.textToSpeech.stream(voiceId, {
       text,
       model_id: 'eleven_multilingual_v2',

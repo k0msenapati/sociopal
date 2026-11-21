@@ -23,15 +23,21 @@ export default function Recorder({ onFinalTranscript, isRecording, setIsRecordin
   }, [isRecording])
 
   const getToken = async () => {
-    const res = await fetch('/api/token')
-    const data = await res.json()
-    return data.token
+    try {
+      const res = await fetch('/api/token')
+      if (!res.ok) return null
+      const data = await res.json()
+      return data.token
+    } catch {
+      return null
+    }
   }
 
   const startRecording = async () => {
     const token = await getToken()
     if (!token) {
-      alert('Failed to get AssemblyAI token')
+      alert('Speech-to-text is disabled (ASSEMBLYAI_API_KEY not configured)')
+      setIsRecording(false)
       return
     }
 
