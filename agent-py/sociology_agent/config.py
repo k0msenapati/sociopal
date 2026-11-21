@@ -9,7 +9,7 @@ load_dotenv()
 
 PERSIST_DIRECTORY = "./chroma_db"
 
-llm = ChatGroq(model="gemma2-9b-it")
+llm = ChatGroq(model="openai/gpt-oss-120b")
 embeddings = FastEmbedEmbeddings()
 web_search_tool = DuckDuckGoSearchResults(output_format="list")
 
