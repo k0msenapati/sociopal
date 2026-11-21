@@ -1,5 +1,55 @@
-.env
-chroma_db/
-.venv/
+# Byte-compiled / optimized files
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
+*.so
+
+# C-extensions & distribution / packaging
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+.venv/
+venv/
+ENV/
+env/
+
+# Environment variables & secrets
+.env
+.env.*
+!.env.example
+
+# Vector databases & Embedding model weights
+data/
+chroma_db/
+.fastembed_cache/
+fastembed_cache/
+.locks/
+
+# Testing & coverage
+.pytest_cache/
+.coverage
+.coverage.*
+htmlcov/
+.mypy_cache/
+.ruff_cache/
+
+# Logs & temporary files
+*.log
+*.tmp
+.DS_Store
+Thumbs.db
