@@ -1,24 +1,16 @@
-import { Geist, Geist_Mono } from 'next/font/google'
 import './globals.css'
 
-const geistSans = Geist({
-  variable: '--font-geist-sans',
-  subsets: ['latin'],
-})
-
-const geistMono = Geist_Mono({
-  variable: '--font-geist-mono',
-  subsets: ['latin'],
-})
-
 export const metadata = {
-  title: 'Sociology Bot',
+  title: 'SocioPal — Intelligent Sociology Agent',
+  description: 'Corrective RAG powered sociology agent with live vector search and web retrieval.',
 }
 
 export default function RootLayout({ children }) {
   return (
-    <html lang="en">
-      <body className={`${geistSans.variable} ${geistMono.variable} antialiased`}>{children}</body>
+    <html lang="en" className="dark">
+      <body className="antialiased bg-[#050508] text-gray-100 selection:bg-violet-500/30 selection:text-white">
+        {children}
+      </body>
     </html>
   )
 }
